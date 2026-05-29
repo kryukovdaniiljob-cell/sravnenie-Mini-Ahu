@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Сравнение приточных установок · Mini-AHU</title>
+<meta name="description" content="Онлайн-сравнение компактных приточных установок: расход воздуха, шум, фильтрация, цена и характеристики.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="nav__inner">
+    <span class="nav__brand">Mini-AHU · Сравнение</span>
+    <div class="nav__actions">
+      <label class="toggle">
+        <input type="checkbox" id="diffToggle">
+        <span>Подсветить различия</span>
+      </label>
+      <button class="btn btn--ghost" id="resetBtn">Сбросить</button>
+    </div>
+  </div>
+</header>
+
+<section class="hero">
+  <h1 class="hero__title">Какая приточная установка вам подходит?</h1>
+  <p class="hero__sub">Выберите до четырёх моделей и сравните их характеристики бок о бок.</p>
+</section>
+
+<section class="controls">
+  <div class="controls__inner">
+    <div class="search">
+      <svg viewBox="0 0 24 24" class="search__icon"><path d="M10 4a6 6 0 1 0 3.8 10.6l4.3 4.3 1.4-1.4-4.3-4.3A6 6 0 0 0 10 4zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg>
+      <input type="search" id="search" placeholder="Поиск по названию или бренду…" autocomplete="off">
+    </div>
+    <div class="filters">
+      <div class="filter">
+        <label>Бренд</label>
+        <select id="fBrand"><option value="">Все</option></select>
+      </div>
+      <div class="filter">
+        <label>Расход воздуха</label>
+        <select id="fFlow">
+          <option value="">Любой</option>
+          <option value="0-500">до 500 м³/ч</option>
+          <option value="500-1000">500–1000</option>
+          <option value="1000-2000">1000–2000</option>
+          <option value="2000-3000">2000–3000</option>
+          <option value="3000-999999">от 3000</option>
+        </select>
+      </div>
+      <div class="filter">
+        <label>Цена</label>
+        <select id="fPrice">
+          <option value="">Любая</option>
+          <option value="0-150000">до 150 000 ₽</option>
+          <option value="150000-300000">150–300 тыс</option>
+          <option value="300000-600000">300–600 тыс</option>
+          <option value="600000-99999999">от 600 тыс</option>
+        </select>
+      </div>
+      <label class="chk"><input type="checkbox" id="fValve"><span>С клапаном</span></label>
+      <label class="chk"><input type="checkbox" id="fFilter"><span>С фильтром</span></label>
+    </div>
+    <div class="controls__meta"><span id="count">0</span> моделей</div>
+  </div>
+</section>
+
+<main class="grid" id="grid"></main>
+
+<!-- selection tray -->
+<div class="tray" id="tray" hidden>
+  <div class="tray__inner">
+    <div class="tray__slots" id="traySlots"></div>
+    <button class="btn btn--primary" id="compareBtn">Сравнить →</button>
+  </div>
+</div>
+
+<!-- comparison -->
+<section class="compare" id="compare" hidden>
+  <h2 class="compare__title">Сравнение моделей</h2>
+  <div class="compare__scroll">
+    <table class="ctable" id="ctable"></table>
+  </div>
+</section>
+
+<footer class="foot">
+  <p>Данные собраны с сайтов производителей (2026-05-29) и носят справочный характер. «н/д» — параметр не опубликован.</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
