@@ -176,27 +176,7 @@ function renderCompare() {
       ctable.querySelectorAll(`.srow[data-sec="${cssesc(t)}"]`).forEach(r => r.classList.toggle('row-hidden'));
     }));
   applyDiff();
-  pinPriority();
 }
-
-// Pin priority rows directly under the sticky model-name header so that
-// «Расход воздуха», «Уровень шума» и «Класс фильтрации» остаются видны при прокрутке.
-function pinPriority() {
-  const thead = ctable.querySelector('thead');
-  if (!thead) return;
-  const navOff = window.matchMedia('(max-width:680px)').matches ? 0 : 98;
-  let acc = navOff + Math.ceil(thead.getBoundingClientRect().height);
-  ctable.querySelectorAll('tr.prio').forEach(tr => {
-    tr.querySelectorAll('td').forEach(td => {
-      td.style.position = 'sticky';
-      td.style.top = acc + 'px';
-      td.style.zIndex = '15';
-      td.style.background = 'var(--bg)';
-    });
-    acc += Math.ceil(tr.getBoundingClientRect().height);
-  });
-}
-window.addEventListener('resize', () => { if (!compare.hidden) pinPriority(); });
 
 function applyDiff() {
   const on = $('#diffToggle').checked;
