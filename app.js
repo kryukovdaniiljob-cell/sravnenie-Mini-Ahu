@@ -31,7 +31,7 @@ const grid = $('#grid'), tray = $('#tray'), traySlots = $('#traySlots'),
 // ---------- init ----------
 fetch('data.json')
   .then(r => r.json())
-  .then(d => { DATA = d; init(); })
+  .then(d => { DATA = d; RATING.applyToAll(DATA); init(); })
   .catch(() => { grid.innerHTML = '<div class="empty-grid">Не удалось загрузить данные.</div>'; });
 
 function init() {
@@ -48,6 +48,20 @@ function init() {
   $('#resetBtn').addEventListener('click', reset);
   $('#compareBtn').addEventListener('click', () => compare.scrollIntoView({ behavior: 'smooth' }));
   $('#diffToggle').addEventListener('change', applyDiff);
+
+  // rating tools: reference + calculator + scale-mode switch
+  RATING.renderReference($('#refContent'));
+  RATING.renderCalculator($('#calcContent'));
+  $('#scaleBadge').textContent = RATING.scaleNote();
+  document.querySelectorAll('input[name="thrMode"]').forEach(r =>
+    r.addEventListener('change', e => {
+      RATING.setMode(e.target.value);          // recomputes all model ratings (cached)
+      RATING.renderReference($('#refContent')); // reference shows current thresholds/mode
+      $('#calcContent').dispatchEvent(new Event('input')); // recompute calculator with new scale
+      $('#scaleBadge').textContent = RATING.scaleNote();
+      renderGrid(); renderCompare();
+    }));
+
   renderGrid(); renderTray(); renderCompare();
 }
 
@@ -79,8 +93,12 @@ function renderGrid() {
     const sel = selected.includes(x.id);
     const card = document.createElement('article');
     card.className = 'card' + (sel ? ' is-selected' : '');
+    const rt = x._rating || { total: 0 };
     card.innerHTML = `
-      <div class="card__brand">${esc(x.brand)}</div>
+      <div class="card__top">
+        <span class="card__brand">${esc(x.brand)}</span>
+        <span class="card__rate" title="Оценка ${rt.total}/100 · ${esc(RATING.scaleNote())}">${RATING.stars(rt.total)}<b>${rt.total}</b></span>
+      </div>
       <div class="card__name">${esc(x.name)}</div>
       <div class="card__specs">
         <span>Расход: <b>${esc(x.flow)}</b> м³/ч</span>
@@ -146,6 +164,14 @@ function renderCompare() {
       <button class="chead__x" data-id="${x.id}">Убрать</button></div></th>`;
   });
   html += '</tr></thead><tbody>';
+
+  // overall rating row (top, prominent)
+  html += '<tr class="prio rate-row"><td class="rowlabel">Оценка (0–100)</td>';
+  models.forEach(x => {
+    const rt = x._rating || { total: 0 };
+    html += `<td><div class="crate">${RATING.stars(rt.total)}<b>${rt.total}</b></div></td>`;
+  });
+  html += '</tr>';
 
   // priority
   PRIORITY.forEach(p => {

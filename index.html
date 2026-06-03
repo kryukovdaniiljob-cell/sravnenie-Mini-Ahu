@@ -63,7 +63,7 @@
       <label class="chk"><input type="checkbox" id="fValve"><span>С клапаном</span></label>
       <label class="chk"><input type="checkbox" id="fFilter"><span>С фильтром</span></label>
     </div>
-    <div class="controls__meta"><span id="count">0</span> моделей</div>
+    <div class="controls__meta"><span id="count">0</span> моделей · <span id="scaleBadge" class="scale-badge">шкала: фикс.</span></div>
   </div>
 </section>
 
@@ -85,10 +85,38 @@
   </div>
 </section>
 
+<!-- rating tools: reference + calculator -->
+<section class="tools">
+  <div class="tools__inner">
+    <h2 class="tools__title">Оценка моделей</h2>
+    <p class="tools__lead">Каждой модели присвоен балл <b>0–100</b> по 5 параметрам (звёзды и число — в карточке и в сравнении).</p>
+
+    <details class="tool" id="refBox" open>
+      <summary>📘 Справочник: как считается оценка</summary>
+      <div class="tool__body">
+        <div class="mode-switch">Режим шкалы:
+          <label><input type="radio" name="thrMode" value="static" checked> статический (фикс. пороги)</label>
+          <label><input type="radio" name="thrMode" value="dynamic"> динамический (по рынку)</label>
+        </div>
+        <div id="refContent"></div>
+      </div>
+    </details>
+
+    <details class="tool" id="calcBox">
+      <summary>🧮 Калькулятор рейтинга новой модели</summary>
+      <div class="tool__body">
+        <p class="tool__hint">Введите характеристики модели, которой ещё нет в базе — получите потенциальный балл по той же формуле. Пустые поля считаются как «нет данных» (вес перекладывается на остальные).</p>
+        <div id="calcContent"></div>
+      </div>
+    </details>
+  </div>
+</section>
+
 <footer class="foot">
   <p>Данные собраны с сайтов производителей (2026-05-29) и носят справочный характер. «н/д» — параметр не опубликован.</p>
 </footer>
 
+<script src="rating.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
