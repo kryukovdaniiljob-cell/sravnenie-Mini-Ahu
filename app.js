@@ -2,26 +2,30 @@
 
 const MAX = 4;
 let DATA = [];
-let selected = [];          // array of ids (max 4)
-let collapsed = {};         // section title -> bool
+let activeType = 'supply';                 // 'supply' | 'pvu'
+let selByType = { supply: [], pvu: [] };   // selected ids per type (max 4 each)
+let collapsed = {};                        // section title -> bool
 
-// priority + sections definition
+const sel = () => selByType[activeType];
+
+// priority rows (shown big at top of compare)
 const PRIORITY = [
   { key: 'flow',         label: 'Расход воздуха, м³/ч' },
   { key: 'noise',        label: 'Уровень шума, дБ(А)' },
   { key: 'filter_class', label: 'Класс фильтрации' },
 ];
+// detail sections (pvuOnly hidden for supply units)
 const SECTIONS = [
   { title: '💰 Цена', rows: [['price', 'Цена, руб']] },
   { title: '📏 Габариты', rows: [['dims', 'Размеры Ш×В×Г, мм'], ['__thick', 'Толщина (мин. сторона), мм'], ['dims_ports', 'С учётом патрубков, мм']] },
   { title: '🔌 Питание и защита', rows: [['power', 'Питание, ф/В/Гц'], ['ip', 'Степень защиты IP'], ['shock', 'Класс электрозащиты']] },
   { title: '🌬️ Воздушный клапан', rows: [['valve', 'Наличие клапана'], ['valve_drive', 'Привод клапана'], ['drive_type', 'Тип привода']] },
-  { title: '🔁 Рекуперация', rows: [['recup', 'Наличие рекуперации'], ['recup_type', 'Тип рекуператора'], ['recup_maker', 'Производитель'], ['recup_eff', 'КПД']] },
+  { title: '🔁 Рекуперация', pvuOnly: true, rows: [['recup', 'Наличие рекуперации'], ['recup_type', 'Тип рекуператора'], ['recup_maker', 'Производитель'], ['recup_eff', 'КПД рекуператора']] },
   { title: '🔥 Нагреватель', rows: [['heater', 'Наличие нагревателя'], ['heater_type', 'Тип (вода/электр.)'], ['heater_elem', 'Элемент (ТЭН/PTC)']] },
   { title: '❄️ Охладитель', rows: [['cooler', 'Наличие охладителя'], ['cooler_type', 'Тип охладителя']] },
-  { title: '🌀 Вентилятор', rows: [['fan_type', 'Тип вентилятора'], ['motor', 'Тип двигателя'], ['two_fans', 'Два вентилятора']] },
+  { title: '🌀 Вентилятор', rows: [['fan_type', 'Тип вентилятора'], ['motor', 'Тип двигателя'], ['power_fan', 'Питание вентилятора'], ['two_fans', 'Два вентилятора']] },
   { title: '🎛️ Управление', rows: [['auto', 'Автоматика'], ['controller', 'Контроллер'], ['remote', 'Пульт'], ['remote_type', 'Тип пульта'], ['wifi', 'Wi-Fi'], ['vav', 'VAV'], ['humidity', 'Влажность'], ['co2', 'Датчик CO₂']] },
-  { title: 'ℹ️ Дополнительно', rows: [['pressure', 'Свободный напор, Па'], ['model_code', 'Модель'], ['url', 'Источник']] },
+  { title: 'ℹ️ Дополнительно', rows: [['pressure', 'Свободный напор, Па'], ['model_code', 'Модель'], ['extra', 'Доп. требования'], ['url', 'Источник']] },
 ];
 
 const $ = (s) => document.querySelector(s);
@@ -35,34 +39,70 @@ fetch('data.json')
   .catch(() => { grid.innerHTML = '<div class="empty-grid">Не удалось загрузить данные.</div>'; });
 
 function init() {
-  // restore from URL
-  const p = new URLSearchParams(location.search).get('c');
-  if (p) selected = p.split(',').map(Number).filter(n => DATA[n]).slice(0, MAX);
-  // brand options
-  const brands = [...new Set(DATA.map(x => x.brand))].sort();
-  const fb = $('#fBrand');
-  brands.forEach(b => { const o = document.createElement('option'); o.value = b; o.textContent = b; fb.appendChild(o); });
-  // listeners
-  ['search', 'fBrand', 'fFlow', 'fPrice', 'fValve', 'fFilter'].forEach(id =>
+  const params = new URLSearchParams(location.search);
+  if (params.get('type') === 'pvu') activeType = 'pvu';
+  const c = params.get('c');
+  if (c) selByType[activeType] = c.split(',').map(Number).filter(n => DATA[n] && DATA[n].type === activeType).slice(0, MAX);
+
+  fillBrandOptions(); fillSegOptions();
+
+  ['search', 'fBrand', 'fSeg', 'fHeater', 'fPrice', 'fValve', 'fFilter', 'fLeaders'].forEach(id =>
     $('#' + id).addEventListener('input', renderGrid));
   $('#resetBtn').addEventListener('click', reset);
   $('#compareBtn').addEventListener('click', () => compare.scrollIntoView({ behavior: 'smooth' }));
   $('#diffToggle').addEventListener('change', applyDiff);
+  document.querySelectorAll('.typeswitch__btn').forEach(b =>
+    b.addEventListener('click', () => switchType(b.dataset.type)));
 
-  // rating tools: reference + calculator + scale-mode switch
-  RATING.renderReference($('#refContent'));
-  RATING.renderCalculator($('#calcContent'));
-  $('#scaleBadge').textContent = RATING.scaleNote();
-  document.querySelectorAll('input[name="thrMode"]').forEach(r =>
-    r.addEventListener('change', e => {
-      RATING.setMode(e.target.value);          // recomputes all model ratings (cached)
-      RATING.renderReference($('#refContent')); // reference shows current thresholds/mode
-      $('#calcContent').dispatchEvent(new Event('input')); // recompute calculator with new scale
-      $('#scaleBadge').textContent = RATING.scaleNote();
-      renderGrid(); renderCompare();
-    }));
-
+  applyTypeUI();
+  updateNavH();
+  window.addEventListener('resize', updateNavH);
   renderGrid(); renderTray(); renderCompare();
+}
+
+// keep the comparison header pinned exactly below the (only) sticky bar — the nav
+function updateNavH() {
+  const n = document.querySelector('.nav');
+  if (n) document.documentElement.style.setProperty('--nav-h', n.offsetHeight + 'px');
+}
+
+// ---------- type switching ----------
+function switchType(type) {
+  if (type === activeType || !RATING.TYPES[type]) return;
+  activeType = type;
+  // reset type-specific filters & search to avoid stale options
+  ['search', 'fBrand', 'fSeg'].forEach(id => $('#' + id).value = '');
+  $('#fLeaders').checked = false;
+  fillBrandOptions(); fillSegOptions();
+  applyTypeUI();
+  syncURL();
+  renderGrid(); renderTray(); renderCompare();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function applyTypeUI() {
+  const T = RATING.TYPES[activeType];
+  document.querySelectorAll('.typeswitch__btn').forEach(b =>
+    b.classList.toggle('is-active', b.dataset.type === activeType));
+  $('#heroTitle').textContent = activeType === 'pvu'
+    ? 'Сравнение приточно-вытяжных установок' : 'Сравнение приточных установок';
+  $('#typeBadge').textContent = T.label.toLowerCase();
+  RATING.renderReference($('#refContent'), activeType);
+  RATING.renderCalculator($('#calcContent'), activeType);
+}
+
+function fillBrandOptions() {
+  const fb = $('#fBrand'); fb.innerHTML = '<option value="">Все</option>';
+  [...new Set(DATA.filter(m => m.type === activeType).map(x => x.brand))].sort()
+    .forEach(b => { const o = document.createElement('option'); o.value = b; o.textContent = b; fb.appendChild(o); });
+}
+function fillSegOptions() {
+  const fs = $('#fSeg'); fs.innerHTML = '<option value="">Любой</option>';
+  RATING.TYPES[activeType].segments.forEach(([, name]) => {
+    const o = document.createElement('option'); o.value = name;
+    o.textContent = `${name} · ${RATING.segLabel(activeType, name)} м³/ч`;
+    fs.appendChild(o);
+  });
 }
 
 // ---------- grid ----------
@@ -70,17 +110,25 @@ function inRange(v, spec) { if (v == null) return false; const [a, b] = spec.spl
 
 function filtered() {
   const q = $('#search').value.trim().toLowerCase();
-  const b = $('#fBrand').value, fl = $('#fFlow').value, pr = $('#fPrice').value;
-  const needValve = $('#fValve').checked, needFilter = $('#fFilter').checked;
-  return DATA.filter(x => {
-    if (q && !(x.name + ' ' + x.brand).toLowerCase().includes(q)) return false;
-    if (b && x.brand !== b) return false;
-    if (fl && !inRange(x.flow_max, fl)) return false;
-    if (pr && !inRange(x.price_num, pr)) return false;
-    if (needValve && x.valve !== 'да') return false;
-    if (needFilter && x.filter !== 'да') return false;
-    return true;
-  });
+  const b = $('#fBrand').value, sg = $('#fSeg').value, pr = $('#fPrice').value, ht = $('#fHeater').value;
+  const needValve = $('#fValve').checked, needFilter = $('#fFilter').checked, needLeaders = $('#fLeaders').checked;
+  return DATA.filter(x => x.type === activeType)
+    .filter(x => {
+      if (q && !(x.name + ' ' + x.brand).toLowerCase().includes(q)) return false;
+      if (b && x.brand !== b) return false;
+      if (sg && x._rating.segment !== sg) return false;
+      if (pr && !inRange(x.price_num, pr)) return false;
+      if (ht) {
+        const hv = String(x.heater_type || '').toLowerCase();
+        if (ht === 'water' && !hv.includes('вод')) return false;
+        if (ht === 'electric' && !hv.includes('электр')) return false;
+      }
+      if (needValve && x.valve !== 'да') return false;
+      if (needFilter && x.filter !== 'да') return false;
+      if (needLeaders && !x._rating.segLeader) return false;
+      return true;
+    })
+    .sort((a, b) => b._rating.total - a._rating.total);
 }
 
 function renderGrid() {
@@ -90,27 +138,31 @@ function renderGrid() {
   if (!list.length) { grid.innerHTML = '<div class="empty-grid">Ничего не найдено. Измените фильтры.</div>'; return; }
   const frag = document.createDocumentFragment();
   list.forEach(x => {
-    const sel = selected.includes(x.id);
-    const card = document.createElement('article');
-    card.className = 'card' + (sel ? ' is-selected' : '');
+    const isSel = sel().includes(x.id);
     const rt = x._rating || { total: 0 };
+    const seg = rt.segment ? `${rt.segment} · ${RATING.segLabel(x.type, rt.segment)} м³/ч` : 'сегмент н/д';
+    const own = x.brand === 'SHUFT';
+    const card = document.createElement('article');
+    card.className = 'card' + (isSel ? ' is-selected' : '') + (own ? ' is-own' : '');
     card.innerHTML = `
       <div class="card__top">
-        <span class="card__brand">${esc(x.brand)}</span>
-        <span class="card__rate" title="Оценка ${rt.total}/100 · ${esc(RATING.scaleNote())}">${RATING.stars(rt.total)}<b>${rt.total}</b></span>
+        <span class="card__brand">${esc(x.brand)}${own ? '<span class="card__own">наш бренд</span>' : ''}</span>
+        <span class="card__rate" title="Оценка ${rt.total}/100"><b>${rt.total}</b>${RATING.stars(rt.total)}</span>
       </div>
+      <div class="card__seg">${esc(seg)}${rt.segLeader ? '<span class="card__leader">★ эталон сегмента</span>' : ''}</div>
       <div class="card__name">${esc(x.name)}</div>
       <div class="card__specs">
         <span>Расход: <b>${esc(x.flow)}</b> м³/ч</span>
         <span>Шум: <b>${esc(x.noise)}</b> дБ(А)</span>
         <span>Фильтр: <b>${esc(x.filter_class)}</b></span>
+        ${x.type === 'pvu' ? `<span>КПД: <b>${esc(x.recup_eff)}</b></span>` : ''}
       </div>
-      <div class="card__price">${x.price_num ? x.price_num.toLocaleString('ru-RU') + ' ₽' : '<span style="color:#b0b0b5;font-size:14px">цена н/д</span>'}</div>
+      <div class="card__price">${x.price_num ? x.price_num.toLocaleString('ru-RU') + ' ₽' : '<span class="card__nd">цена н/д</span>'}</div>
       <div class="card__add"></div>`;
     const btn = document.createElement('button');
-    btn.className = 'btn ' + (sel ? 'btn--ghost' : 'btn--primary');
-    btn.textContent = sel ? '✓ Выбрано' : 'Добавить к сравнению';
-    btn.disabled = !sel && selected.length >= MAX;
+    btn.className = 'btn ' + (isSel ? 'btn--ghost' : 'btn--primary');
+    btn.textContent = isSel ? '✓ Выбрано' : 'Добавить к сравнению';
+    btn.disabled = !isSel && sel().length >= MAX;
     btn.addEventListener('click', () => toggle(x.id));
     card.querySelector('.card__add').appendChild(btn);
     frag.appendChild(card);
@@ -119,26 +171,28 @@ function renderGrid() {
 }
 
 function toggle(id) {
-  const i = selected.indexOf(id);
-  if (i >= 0) selected.splice(i, 1);
-  else if (selected.length < MAX) selected.push(id);
+  const s = sel();
+  const i = s.indexOf(id);
+  if (i >= 0) s.splice(i, 1);
+  else if (s.length < MAX) s.push(id);
   syncURL(); renderGrid(); renderTray(); renderCompare();
 }
 
 function reset() {
-  selected = [];
-  ['search', 'fBrand', 'fFlow', 'fPrice'].forEach(id => $('#' + id).value = '');
-  $('#fValve').checked = $('#fFilter').checked = false;
+  selByType[activeType] = [];
+  ['search', 'fBrand', 'fSeg', 'fHeater', 'fPrice'].forEach(id => $('#' + id).value = '');
+  $('#fValve').checked = $('#fFilter').checked = $('#fLeaders').checked = false;
   syncURL(); renderGrid(); renderTray(); renderCompare();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // ---------- tray ----------
 function renderTray() {
-  tray.hidden = selected.length === 0;
+  const s = sel();
+  tray.hidden = s.length === 0;
   traySlots.innerHTML = '';
   for (let i = 0; i < MAX; i++) {
-    const id = selected[i];
+    const id = s[i];
     const div = document.createElement('div');
     if (id == null) { div.className = 'slot empty'; div.textContent = '+'; }
     else {
@@ -149,29 +203,52 @@ function renderTray() {
     }
     traySlots.appendChild(div);
   }
-  $('#compareBtn').disabled = selected.length < 2;
+  $('#compareBtn').disabled = s.length < 2;
 }
 
 // ---------- compare ----------
 function renderCompare() {
-  compare.hidden = selected.length === 0;
-  if (selected.length === 0) return;
-  const models = selected.map(id => DATA[id]);
+  const s = sel();
+  compare.hidden = s.length === 0;
+  if (s.length === 0) return;
+  const models = s.map(id => DATA[id]);
+  const T = RATING.TYPES[activeType];
+
   let html = '<thead><tr><th class="rowlabel"></th>';
-  models.forEach((x, i) => {
-    html += `<th><div class="chead"><span class="chead__brand">${esc(x.brand)}</span>
-      <span class="chead__name">${esc(x.name)}</span>
+  models.forEach(x => {
+    const own = x.brand === 'SHUFT';
+    html += `<th><div class="chead${own ? ' chead--own' : ''}"><span class="chead__brand">${esc(x.brand)}${own ? ' · наш' : ''}</span>
+      <span class="chead__name" title="${esc(x.name)}">${esc(x.name)}</span>
       <button class="chead__x" data-id="${x.id}">Убрать</button></div></th>`;
   });
   html += '</tr></thead><tbody>';
 
-  // overall rating row (top, prominent)
+  // overall rating
   html += '<tr class="prio rate-row"><td class="rowlabel">Оценка (0–100)</td>';
   models.forEach(x => {
     const rt = x._rating || { total: 0 };
-    html += `<td><div class="crate">${RATING.stars(rt.total)}<b>${rt.total}</b></div></td>`;
+    html += `<td><div class="crate"><b>${rt.total}</b>${RATING.stars(rt.total)}</div></td>`;
   });
   html += '</tr>';
+
+  // segment
+  html += '<tr class="seg-row"><td class="rowlabel">Сегмент (размерный класс)</td>';
+  models.forEach(x => {
+    const sgn = x._rating.segment;
+    html += `<td>${sgn ? esc(sgn + ' · ' + RATING.segLabel(x.type, sgn) + ' м³/ч') : '—'}${x._rating.segLeader ? '<span class="leader-tag">★ эталон</span>' : ''}</td>`;
+  });
+  html += '</tr>';
+
+  // breakdown (collapsible)
+  const brkTitle = '🧪 Разбор оценки';
+  const brkC = !!collapsed[brkTitle];
+  html += `<tr class="sec ${brkC ? 'collapsed' : ''}" data-sec="${esc(brkTitle)}"><td colspan="${models.length + 1}"><span class="arrow">▾</span>${esc(brkTitle)} · среднее ${T.params.length} параметров</td></tr>`;
+  T.params.forEach(key => {
+    const m = RATING.PARAM[key];
+    html += `<tr class="srow ${brkC ? 'row-hidden' : ''}" data-sec="${esc(brkTitle)}"><td class="rowlabel">${m.icon} ${m.label}</td>`;
+    models.forEach(x => html += `<td>${partCell(x, key)}</td>`);
+    html += '</tr>';
+  });
 
   // priority
   PRIORITY.forEach(p => {
@@ -180,8 +257,8 @@ function renderCompare() {
     html += '</tr>';
   });
 
-  // sections
-  SECTIONS.forEach(sec => {
+  // sections (skip pvu-only for supply)
+  SECTIONS.filter(secVisible).forEach(sec => {
     const isC = !!collapsed[sec.title];
     html += `<tr class="sec ${isC ? 'collapsed' : ''}" data-sec="${esc(sec.title)}"><td colspan="${models.length + 1}"><span class="arrow">▾</span>${esc(sec.title)}</td></tr>`;
     sec.rows.forEach(([key, label]) => {
@@ -192,6 +269,8 @@ function renderCompare() {
   });
   html += '</tbody>';
   ctable.innerHTML = html;
+  // equal, fixed-width columns so a long name in one column never squeezes another
+  ctable.style.minWidth = (220 + models.length * 260) + 'px';
 
   ctable.querySelectorAll('.chead__x').forEach(b =>
     b.addEventListener('click', () => toggle(Number(b.dataset.id))));
@@ -204,11 +283,21 @@ function renderCompare() {
   applyDiff();
 }
 
+function secVisible(sec) { return !(sec.pvuOnly && activeType !== 'pvu'); }
+
+function partCell(x, key) {
+  const p = x._rating && x._rating.parts ? x._rating.parts[key] : null;
+  if (!p) return ndp();
+  if (!p.active) return `<div class="pbar is-off"><span class="pbar__track"></span><i>нет данных</i></div>`;
+  const v = Math.round(p.score);
+  return `<div class="pbar"><span class="pbar__track"><span class="pbar__fill" style="width:${v}%"></span></span><i>${v}</i></div>`;
+}
+
 function applyDiff() {
   const on = $('#diffToggle').checked;
   ctable.querySelectorAll('tr.diff').forEach(tr => {
     const key = tr.dataset.key;
-    const vals = selected.map(id => (DATA[id][key] || '').trim());
+    const vals = sel().map(id => (DATA[id][key] || '').toString().trim());
     const diff = new Set(vals).size > 1;
     tr.classList.toggle('is-on', on && diff);
   });
@@ -222,13 +311,9 @@ function fmt(key, x) {
   let v = (x[key] ?? '').toString().trim();
   if (key === 'price') return x.price_num ? `<span class="val val--big">${x.price_num.toLocaleString('ru-RU')} ₽</span>` : ndp();
   if (key === 'url') return v ? `<a class="linkout" href="${esc(v)}" target="_blank" rel="noopener">открыть ↗</a>` : ndp();
-  if (v === '' || v.toLowerCase() === 'н/д' || v.toLowerCase() === 'none') return ndp();
+  if (v === '' || v.toLowerCase() === 'н/д' || v.toLowerCase() === 'none' || v.toLowerCase() === 'нет данных') return ndp();
   if (v === 'да') return '<span class="pill pill--ok">да</span>';
   if (v === 'нет') return '<span class="pill pill--no">нет</span>';
-  if (key === 'dims') {
-    const t = x.thickness;
-    return `<span class="val">${esc(v)}</span>${t ? `<span class="thick">Г ${t}</span>` : ''}`;
-  }
   const big = ['flow', 'noise', 'filter_class'].includes(key);
   return `<span class="val${big ? ' val--big' : ''}">${esc(v)}</span>`;
 }
@@ -237,8 +322,9 @@ function ndp() { return '<span class="pill pill--nd">н/д</span>'; }
 // ---------- utils ----------
 function syncURL() {
   const u = new URL(location);
-  if (selected.length) u.searchParams.set('c', selected.join(','));
-  else u.searchParams.delete('c');
+  u.searchParams.set('type', activeType);
+  const s = sel();
+  if (s.length) u.searchParams.set('c', s.join(',')); else u.searchParams.delete('c');
   history.replaceState(null, '', u);
 }
 function esc(s) { return (s ?? '').toString().replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }

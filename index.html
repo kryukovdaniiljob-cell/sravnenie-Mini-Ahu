@@ -3,16 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Сравнение приточных установок · Mini-AHU</title>
-<meta name="description" content="Онлайн-сравнение компактных приточных установок: расход воздуха, шум, фильтрация, цена и характеристики.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<title>SHUFT · Сравнение приточных и приточно-вытяжных установок</title>
+<meta name="description" content="Онлайн-сравнение приточных и приточно-вытяжных установок: расход воздуха, шум, фильтрация, КПД, цена. Балл 0–100 по размерным сегментам.">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <header class="nav" id="nav">
   <div class="nav__inner">
-    <span class="nav__brand">Mini-AHU · Сравнение</span>
+    <a class="nav__brand" href="./" aria-label="SHUFT">
+      <img src="shuft-logo.png" alt="SHUFT" class="nav__logo">
+    </a>
     <div class="nav__actions">
       <label class="toggle">
         <input type="checkbox" id="diffToggle">
@@ -24,46 +25,54 @@
 </header>
 
 <section class="hero">
-  <h1 class="hero__title">Какая приточная установка вам подходит?</h1>
-  <p class="hero__sub">Выберите до четырёх моделей и сравните их характеристики бок о бок.</p>
+  <h1 class="hero__title" id="heroTitle">Сравнение приточных установок</h1>
+  <p class="hero__sub" id="heroSub">Выберите тип установки, затем до четырёх моделей — и сравните их бок о бок.</p>
 </section>
 
-<section class="controls">
+<section class="controls" id="controls">
   <div class="controls__inner">
-    <div class="search">
-      <svg viewBox="0 0 24 24" class="search__icon"><path d="M10 4a6 6 0 1 0 3.8 10.6l4.3 4.3 1.4-1.4-4.3-4.3A6 6 0 0 0 10 4zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg>
-      <input type="search" id="search" placeholder="Поиск по названию или бренду…" autocomplete="off">
+    <div class="typeswitch" id="typeSwitch" role="tablist" aria-label="Тип установки">
+      <button class="typeswitch__btn is-active" data-type="supply" role="tab">Приточные</button>
+      <button class="typeswitch__btn" data-type="pvu" role="tab">Приточно-вытяжные</button>
     </div>
-    <div class="filters">
-      <div class="filter">
-        <label>Бренд</label>
-        <select id="fBrand"><option value="">Все</option></select>
+    <div class="controls__row">
+      <div class="search">
+        <svg viewBox="0 0 24 24" class="search__icon"><path d="M10 4a6 6 0 1 0 3.8 10.6l4.3 4.3 1.4-1.4-4.3-4.3A6 6 0 0 0 10 4zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg>
+        <input type="search" id="search" placeholder="Поиск по названию или бренду…" autocomplete="off">
       </div>
-      <div class="filter">
-        <label>Расход воздуха</label>
-        <select id="fFlow">
-          <option value="">Любой</option>
-          <option value="0-500">до 500 м³/ч</option>
-          <option value="500-1000">500–1000</option>
-          <option value="1000-2000">1000–2000</option>
-          <option value="2000-3000">2000–3000</option>
-          <option value="3000-999999">от 3000</option>
-        </select>
+      <div class="filters">
+        <div class="filter">
+          <label>Бренд</label>
+          <select id="fBrand"><option value="">Все</option></select>
+        </div>
+        <div class="filter">
+          <label>Сегмент (по расходу)</label>
+          <select id="fSeg"><option value="">Любой</option></select>
+        </div>
+        <div class="filter">
+          <label>Нагреватель</label>
+          <select id="fHeater">
+            <option value="">Любой</option>
+            <option value="water">Водяной</option>
+            <option value="electric">Электрический</option>
+          </select>
+        </div>
+        <div class="filter">
+          <label>Цена</label>
+          <select id="fPrice">
+            <option value="">Любая</option>
+            <option value="0-150000">до 150 000 ₽</option>
+            <option value="150000-300000">150–300 тыс</option>
+            <option value="300000-600000">300–600 тыс</option>
+            <option value="600000-99999999">от 600 тыс</option>
+          </select>
+        </div>
+        <label class="chk"><input type="checkbox" id="fValve"><span>С клапаном</span></label>
+        <label class="chk"><input type="checkbox" id="fFilter"><span>С фильтром</span></label>
+        <label class="chk"><input type="checkbox" id="fLeaders"><span>Только эталоны</span></label>
       </div>
-      <div class="filter">
-        <label>Цена</label>
-        <select id="fPrice">
-          <option value="">Любая</option>
-          <option value="0-150000">до 150 000 ₽</option>
-          <option value="150000-300000">150–300 тыс</option>
-          <option value="300000-600000">300–600 тыс</option>
-          <option value="600000-99999999">от 600 тыс</option>
-        </select>
-      </div>
-      <label class="chk"><input type="checkbox" id="fValve"><span>С клапаном</span></label>
-      <label class="chk"><input type="checkbox" id="fFilter"><span>С фильтром</span></label>
+      <div class="controls__meta"><span id="count">0</span> моделей · <span id="typeBadge" class="type-badge">приточные</span></div>
     </div>
-    <div class="controls__meta"><span id="count">0</span> моделей · <span id="scaleBadge" class="scale-badge">шкала: фикс.</span></div>
   </div>
 </section>
 
@@ -88,16 +97,12 @@
 <!-- rating tools: reference + calculator -->
 <section class="tools">
   <div class="tools__inner">
-    <h2 class="tools__title">Оценка моделей</h2>
-    <p class="tools__lead">Каждой модели присвоен балл <b>0–100</b> по 5 параметрам (звёзды и число — в карточке и в сравнении).</p>
+    <h2 class="tools__title">Оценка моделей (0–100)</h2>
+    <p class="tools__lead" id="toolsLead">Балл — среднее равновесных параметров внутри своего типа и размерного сегмента. Чем меньше пропусков и чем выгоднее модель относительно одноклассников — тем выше балл.</p>
 
-    <details class="tool" id="refBox" open>
+    <details class="tool" id="refBox">
       <summary>📘 Справочник: как считается оценка</summary>
       <div class="tool__body">
-        <div class="mode-switch">Режим шкалы:
-          <label><input type="radio" name="thrMode" value="static" checked> статический (фикс. пороги)</label>
-          <label><input type="radio" name="thrMode" value="dynamic"> динамический (по рынку)</label>
-        </div>
         <div id="refContent"></div>
       </div>
     </details>
@@ -105,7 +110,7 @@
     <details class="tool" id="calcBox">
       <summary>🧮 Калькулятор рейтинга новой модели</summary>
       <div class="tool__body">
-        <p class="tool__hint">Введите характеристики модели, которой ещё нет в базе — получите потенциальный балл по той же формуле. Пустые поля считаются как «нет данных» (вес перекладывается на остальные).</p>
+        <p class="tool__hint">Введите характеристики модели — получите потенциальный балл по той же методике, относительно текущего рынка выбранного типа. Пустые поля считаются как «нет данных» (балл параметра = 0).</p>
         <div id="calcContent"></div>
       </div>
     </details>
@@ -113,7 +118,7 @@
 </section>
 
 <footer class="foot">
-  <p>Данные собраны с сайтов производителей (2026-05-29) и носят справочный характер. «н/д» — параметр не опубликован.</p>
+  <p>Данные собраны с сайтов производителей и носят справочный характер. «н/д» — параметр не опубликован. Балл шума приблизительный (производители измеряют его по-разному).</p>
 </footer>
 
 <script src="rating.js"></script>

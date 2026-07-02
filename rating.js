@@ -1,178 +1,185 @@
 'use strict';
 /*
- * Rating engine (0–100) for Mini-AHU models.
- * Single source of truth: CONFIG. Both the catalogue and the calculator
- * call RATING.compute(...). Reference & calculator UIs are generated from CONFIG,
- * so they always stay in sync with the real formula.
+ * Rating engine (0–100) — методика SHUFT для приточных и приточно-вытяжных установок.
+ * Баллы считаются ВНУТРИ типа: сегментные параметры нормируются внутри сегмента
+ * (меньше = лучше), абсолютные — глобально по типу (больше = лучше). Правила краёв:
+ * нет данных → 0, нет разброса (max==min) → 50. Итог = среднее всех параметров
+ * (ПВУ: 6 с КПД, приточные: 5 без КПД). Полное описание — LOGIC.md.
+ *
+ * Единый источник правды: и каталог, и калькулятор, и справочник используют CONFIG.
  */
 const RATING = (function () {
 
-  // ───────────────────────── CONFIG (edit weights/thresholds here) ─────────────
-  const CONFIG = {
-    thresholdMode: 'static',            // 'static' | 'dynamic'
-    weights: { air_value: 25, compactness: 20, filtration: 25, acoustics: 20, functionality: 10 },
-    // hardcoded normalization bounds (5th / 90th percentile of the base)
-    thresholds: {
-      air_value:   { low: 1340, high: 4500 },   // расход / цена_млн
-      compactness: { low: 1.0,  high: 5.6  },    // расход / толщина
-      acoustics:   { low: 1.3,  high: 7.0  },    // 2^((65-шум)/10)
+  // ───────────────────────── CONFIG ─────────────────────────
+  const TYPES = {
+    pvu: {
+      label: 'Приточно-вытяжные',
+      short: 'ПВУ',
+      params: ['price', 'thick', 'noise', 'filter', 'func', 'eff'],   // 6
+      segments: [[250,'S1'],[400,'S2'],[550,'S3'],[900,'S4'],[1300,'S5'],[1700,'S6'],[2500,'S7'],[Infinity,'S8']],
     },
-    filterScores: {
-      G1: 1, G2: 1.5, G3: 2, EU3: 2, G4: 4, EU4: 4, F5: 5, EU5: 5, F6: 6,
-      F7: 7, EU7: 7, F8: 8, F9: 8.5, EU9: 8.5, E10: 9, E11: 9.5, E12: 9.8,
-      EPA: 10, H10: 10, H11: 10, HEPA: 10, H12: 10, H13: 10, H14: 10,
+    supply: {
+      label: 'Приточные',
+      short: 'ПУ',
+      params: ['price', 'thick', 'noise', 'filter', 'func'],          // 5
+      segments: [[500,'S1'],[800,'S2'],[1400,'S3'],[2500,'S4'],[3500,'S5'],[5000,'S6'],[Infinity,'S7']],
     },
-    functionScores: { cooler: 25, vav: 20, humidity: 15, co2: 15, wifi: 15, recup: 10 },
-    dynamicMinSamples: 20,              // fewer data points → fall back to static
   };
 
-  // descriptive metadata (used by reference & breakdown — kept next to CONFIG)
-  const META = {
-    air_value:     { label: 'Ценность воздуха', icon: '💨',
-                     desc: 'Сколько воздуха даёт каждый рубль. Единственный показатель, где участвует цена.',
-                     formula: 'Расход / Цена_млн' },
-    compactness:   { label: 'Компактность', icon: '📐',
-                     desc: 'Инженерная плотность потока — сколько м³/ч прокачивается через каждый мм толщины.',
-                     formula: 'Расход / Толщина' },
-    filtration:    { label: 'Фильтрация', icon: '🧼',
-                     desc: 'Класс фильтра по таблице (0–10), затем ×10. Абсолютная шкала.',
-                     formula: 'Баллы_класса × 10' },
-    acoustics:     { label: 'Акустика', icon: '🔇',
-                     desc: 'Тишина по логарифмической шкале (10 дБ = двукратная разница громкости).',
-                     formula: '2 ^ ((65 − Шум) / 10)' },
-    functionality: { label: 'Функциональность', icon: '🧩',
-                     desc: 'Сумма баллов за наличие функций (макс. 100). Абсолютная шкала.',
-                     formula: 'Σ баллов за «да», ≤ 100' },
+  // лестница рангов класса фильтрации
+  const LADDER = [['H14',18],['H13',17],['H11',15],['HEPA',15],['E12',14],['E11',13],
+    ['EPA',12],['E10',12],['EU9',11],['F9',11],['F8',10],['EU7',9],['F7',9],['F6',8],
+    ['EU5',7],['F5',7],['M6',6],['M5',6],['EU4',4],['G4',4],['EU3',3],['G3',3],['G2',2],
+    ['ПЫЛЕВОЙ',2],['G1',1]];
+
+  const PARAM = {
+    price:  { label:'Цена',       icon:'💰', kind:'seg',  field:'price_num',   better:'low',
+              desc:'Стоимость относительно моделей своего размерного класса (сегмента).' },
+    thick:  { label:'Толщина',    icon:'📐', kind:'seg',  field:'thickness',   better:'low',
+              desc:'Наименьший габарит (компактность монтажа) внутри сегмента.' },
+    noise:  { label:'Шум',        icon:'🔇', kind:'seg',  field:'noise_max',   better:'low',
+              desc:'Максимальный уровень шума, дБ(А). Метрика приблизительная.' },
+    filter: { label:'Фильтрация', icon:'🧼', kind:'glob', field:'filter_rank', better:'high',
+              desc:'Класс фильтра по лестнице рангов. Абсолютная шкала по всему типу.' },
+    func:   { label:'Функции',    icon:'🧩', kind:'func', field:'func_count',  better:'high',
+              desc:'Кол-во из 4: Wi-Fi, VAV, влажность, CO₂. Балл = n / 4 × 100.' },
+    eff:    { label:'КПД',        icon:'🔁', kind:'glob', field:'eff',         better:'high',
+              desc:'КПД рекуператора, %. Только для ПВУ. Абсолютная шкала по типу.' },
   };
-  const ORDER = ['air_value', 'compactness', 'filtration', 'acoustics', 'functionality'];
-  const NORMALIZED = ['air_value', 'compactness', 'acoustics']; // affected by dynamic thresholds
 
   // ───────────────────────── helpers ─────────────────────────
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
-  const isYes = v => /^да/i.test((v ?? '').toString().trim());
-  const isNd = v => { const s = (v ?? '').toString().trim().toLowerCase(); return s === '' || s === 'н/д' || s === 'none' || s === 'нд'; };
+  const intsOf = s => { const m = String(s == null ? '' : s).match(/\d+/g); return m ? m.map(Number) : []; };
+  const isYes  = v => String(v == null ? '' : v).trim().toLowerCase() === 'да';
 
-  function maxNum(s) {                   // "450-1000" | "1000" | 58 -> max number
-    if (s == null || s === '') return null;
-    if (typeof s === 'number') return isFinite(s) ? s : null;
-    const m = String(s).replace(/ /g, ' ').match(/\d+(?:[.,]\d+)?/g);
-    if (!m) return null;
-    return Math.max(...m.map(x => parseFloat(x.replace(',', '.'))));
+  function priceNum(b)  { const d = String(b == null ? '' : b).replace(/[^\d]/g, ''); return d ? parseInt(d, 10) : null; }
+  function flowMax(e)   { const x = intsOf(e); return x.length ? Math.max(...x) : null; }
+  function thicknessOf(g){ if (/запрос/i.test(g || '')) return null; const x = intsOf(g).filter(n => n >= 50); return x.length ? Math.min(...x) : null; }
+  function noiseMax(l)  { const x = intsOf(l).filter(n => n >= 10 && n <= 90); return x.length ? Math.max(...x) : null; }
+  function effPct(u)    { const m = String(u == null ? '' : u).match(/(\d+)\s*%/); return m ? parseInt(m[1], 10) : null; }
+  function filterRank(q){
+    const up = String(q == null ? '' : q).toUpperCase().replace(/\s/g, '');
+    let best = null;
+    for (const [key, rank] of LADDER) if (up.includes(key)) best = best == null ? rank : Math.max(best, rank);
+    return best;
   }
-  function thicknessOf(dim) {            // "660×706×280" -> 280 (smallest of ≥2)
-    if (!dim || /запрос/i.test(dim)) return null;
-    const parts = String(dim).split(/[x×х*]/);
-    const v = [];
-    parts.forEach(p => { const m = p.match(/\d+(?:[.,]\d+)?/); if (m) v.push(parseFloat(m[0].replace(',', '.'))); });
-    return v.length >= 2 ? Math.min(...v) : null;
+  function funcCount(o) { return [o.wifi, o.vav, o.humidity, o.co2].filter(isYes).length; }
+
+  function segment(flow, type) {
+    if (flow == null) return null;
+    for (const [hi, name] of TYPES[type].segments) if (flow <= hi) return name;
+    return TYPES[type].segments[TYPES[type].segments.length - 1][1];
   }
-  function filterPoints(filterClass, hasFilter) {
-    const toks = String(filterClass || '').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
-    const scores = toks.map(t => CONFIG.filterScores[t]).filter(s => s != null); // CARB & junk ignored
-    if (scores.length) return Math.max(...scores);
-    const h = (hasFilter ?? '').toString().toLowerCase();
-    if (h.includes('да')) return CONFIG.filterScores.G4;   // filter present, class unknown -> G4
-    if (h.includes('нет')) return 0;                       // no filter
-    return null;                                            // nothing known -> no data
-  }
-  function norm(raw, t) { return raw == null ? null : clamp((raw - t.low) / (t.high - t.low), 0, 1) * 100; }
-  function percentile(sorted, p) {
-    if (!sorted.length) return null;
-    const idx = (p / 100) * (sorted.length - 1), lo = Math.floor(idx), hi = Math.ceil(idx);
-    return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+  function segLabel(type, name) {
+    const segs = TYPES[type].segments;
+    for (let i = 0; i < segs.length; i++) if (segs[i][1] === name) {
+      const hi = segs[i][0];
+      if (hi === Infinity) return `> ${segs[i - 1][0].toLocaleString('ru-RU')}`;
+      if (i === 0) return `≤ ${hi.toLocaleString('ru-RU')}`;
+      return `${(segs[i - 1][0] + 1).toLocaleString('ru-RU')}–${hi.toLocaleString('ru-RU')}`;
+    }
+    return '';
   }
 
   // ───────────────────────── inputs ─────────────────────────
-  // turn a DB model (data.json) into the raw inputs the formula needs
-  function deriveInputs(m) {
+  function inputsOf(m) {
     return {
-      priceNum:    m.price_num != null ? m.price_num : maxNum(m.price),
-      flowMax:     m.flow_max  != null ? m.flow_max  : maxNum(m.flow),
-      thickness:   m.thickness != null ? m.thickness : thicknessOf(m.dims),
-      noiseMax:    m.noise_max != null ? m.noise_max : maxNum(m.noise),
-      filterClass: m.filter_class || '',
-      hasFilter:   m.filter || '',
-      funcs: {
-        cooler: isYes(m.cooler), vav: isYes(m.vav), humidity: isYes(m.humidity),
-        co2: isYes(m.co2), wifi: isYes(m.wifi), recup: isYes(m.recup),
-      },
+      type:   m.type,
+      price:  m.price_num   != null ? m.price_num   : priceNum(m.price),
+      flow:   m.flow_max    != null ? m.flow_max    : flowMax(m.flow),
+      thick:  m.thickness   != null ? m.thickness   : thicknessOf(m.dims),
+      noise:  m.noise_max   != null ? m.noise_max   : noiseMax(m.noise),
+      filter: m.filter_rank != null ? m.filter_rank : filterRank(m.filter_class),
+      func:   m.func_count  != null ? m.func_count  : funcCount(m),
+      eff:    m.type === 'pvu' ? (m.eff != null ? m.eff : effPct(m.recup_eff)) : null,
     };
   }
 
-  // raw (pre-normalization) value for a normalized indicator — used by dynamic thresholds
-  function rawValue(key, inp) {
-    if (key === 'air_value')   return (inp.priceNum > 0 && inp.flowMax != null) ? inp.flowMax / (inp.priceNum / 1e6) : null;
-    if (key === 'compactness') return (inp.flowMax != null && inp.thickness > 0) ? inp.flowMax / inp.thickness : null;
-    if (key === 'acoustics')   return (inp.noiseMax != null) ? Math.pow(2, (65 - inp.noiseMax) / 10) : null;
-    return null;
+  // ───────────────────────── bounds (per type) ─────────────────────────
+  const _bounds = {};
+  function computeBounds(list, type) {
+    const seg = { price:{}, thick:{}, noise:{} };
+    const glob = {};
+    const globKeys = ['filter'].concat(type === 'pvu' ? ['eff'] : []);
+    list.forEach(m => {
+      const inp = inputsOf(m), sg = segment(inp.flow, type);
+      ['price','thick','noise'].forEach(p => {
+        const v = inp[p]; if (v == null || sg == null) return;
+        const b = seg[p][sg] || (seg[p][sg] = { min:v, max:v });
+        b.min = Math.min(b.min, v); b.max = Math.max(b.max, v);
+      });
+      globKeys.forEach(p => {
+        const v = inp[p]; if (v == null) return;
+        const g = glob[p] || (glob[p] = { min:v, max:v });
+        g.min = Math.min(g.min, v); g.max = Math.max(g.max, v);
+      });
+    });
+    return { seg, glob };
   }
 
   // ───────────────────────── core compute ─────────────────────────
-  // inputs -> { total, breakdown:[{key,label,icon,score,weight,effWeight,raw,active}] }
-  function compute(inp, thresholds) {
-    const T = thresholds || effectiveThresholds();
-    const score = {
-      air_value:   norm(rawValue('air_value', inp),   T.air_value),
-      compactness: norm(rawValue('compactness', inp), T.compactness),
-      acoustics:   norm(rawValue('acoustics', inp),   T.acoustics),
-      filtration:  (() => { const p = filterPoints(inp.filterClass, inp.hasFilter); return p == null ? null : p * 10; })(),
-      functionality: (() => {
-        let s = 0; for (const k in CONFIG.functionScores) if (inp.funcs && inp.funcs[k]) s += CONFIG.functionScores[k];
-        return Math.min(s, 100);                 // always active (absence of a function = 0, which is meaningful)
-      })(),
+  // inp (parsed) + bounds + type → { total, parts:{key:{score,active}}, segment }
+  function scoreOne(inp, bounds, type) {
+    const sg = segment(inp.flow, type);
+    const segScore = p => {
+      const v = inp[p];
+      if (v == null || sg == null) return { score:0, active:false };
+      const b = bounds.seg[p][sg];
+      if (!b) return { score:0, active:false };
+      if (b.max === b.min) return { score:50, active:true };
+      return { score: clamp(100 * (b.max - v) / (b.max - b.min), 0, 100), active:true };   // less = better
     };
-    const rows = ORDER.map(k => ({
-      key: k, label: META[k].label, icon: META[k].icon,
-      weight: CONFIG.weights[k], score: score[k], raw: rawValue(k, inp),
-      active: score[k] != null,
-    }));
-    const active = rows.filter(r => r.active);
-    const wsum = active.reduce((a, r) => a + r.weight, 0) || 1;
-    let total = 0;
-    rows.forEach(r => {
-      r.effWeight = r.active ? r.weight / wsum * 100 : 0;
-      if (r.active) total += r.score * r.effWeight / 100;
-    });
-    return { total: Math.round(total), breakdown: rows, missing: rows.filter(r => !r.active).map(r => r.key) };
-  }
-
-  // ───────────────────────── thresholds (static / dynamic + cache) ─────────────
-  let _effCache = null, _cacheKey = '';
-  function computeDynamic(models) {
-    const out = {};
-    NORMALIZED.forEach(key => {
-      const vals = models.map(m => rawValue(key, deriveInputs(m)))
-        .filter(v => v != null && isFinite(v)).sort((a, b) => a - b);
-      if (vals.length < CONFIG.dynamicMinSamples) { out[key] = CONFIG.thresholds[key]; return; }
-      const low = percentile(vals, 5), high = percentile(vals, 90);
-      out[key] = (high - low > 1e-9) ? { low, high } : CONFIG.thresholds[key];
-    });
-    return out;
-  }
-  let _models = [];
-  function effectiveThresholds() {
-    if (CONFIG.thresholdMode === 'static') return CONFIG.thresholds;
-    const key = 'dyn:' + _models.length;
-    if (_cacheKey !== key || !_effCache) { _effCache = computeDynamic(_models); _cacheKey = key; }
-    return _effCache;
+    const globScore = p => {
+      const v = inp[p];
+      if (v == null) return { score:0, active:false };
+      const g = bounds.glob[p];
+      if (!g) return { score:0, active:false };
+      if (g.max === g.min) return { score:50, active:true };
+      return { score: clamp(100 * (v - g.min) / (g.max - g.min), 0, 100), active:true };    // more = better
+    };
+    const parts = {
+      price:  segScore('price'),
+      thick:  segScore('thick'),
+      noise:  segScore('noise'),
+      filter: globScore('filter'),
+      func:   { score: inp.func / 4 * 100, active:true },
+    };
+    if (type === 'pvu') parts.eff = globScore('eff');
+    const keys = TYPES[type].params;
+    let sum = 0; keys.forEach(k => sum += parts[k].score);
+    return { total: Math.round(sum / keys.length), parts, segment: sg, type };
   }
 
   // ───────────────────────── public: apply to DB ─────────────────────────
   function applyToAll(models) {
-    _models = models; _effCache = null; _cacheKey = '';   // invalidate cache on (re)load
-    const T = effectiveThresholds();
-    models.forEach(m => { m._rating = compute(deriveInputs(m), T); });
+    Object.keys(TYPES).forEach(type => {
+      const list = models.filter(m => m.type === type);
+      const bounds = computeBounds(list, type);
+      _bounds[type] = bounds;
+      list.forEach(m => { m._rating = scoreOne(inputsOf(m), bounds, type); });
+      // эталон сегмента — макс. ИТОГ внутри сегмента
+      const byseg = {};
+      list.forEach(m => { const s = m._rating.segment; if (s == null) return; (byseg[s] || (byseg[s] = [])).push(m); });
+      Object.values(byseg).forEach(arr => {
+        let best = arr[0]; arr.forEach(m => { if (m._rating.total > best._rating.total) best = m; });
+        arr.forEach(m => { m._rating.segLeader = (m === best); });
+      });
+    });
     return models;
   }
-  function setMode(mode) {
-    CONFIG.thresholdMode = (mode === 'dynamic') ? 'dynamic' : 'static';
-    _effCache = null; _cacheKey = '';
-    if (_models.length) applyToAll(_models);
-  }
-  function scaleNote() {
-    return CONFIG.thresholdMode === 'dynamic'
-      ? `шкала: рынок ${_models.length} моделей`
-      : 'шкала: фикс.';
+
+  // hypothetical model (calculator) — score against the loaded sample of `type`
+  function computeFor(type, raw) {
+    const inp = {
+      type, price: raw.price, flow: raw.flow, thick: raw.thick, noise: raw.noise,
+      filter: raw.filterClass != null && raw.filterClass !== '' ? filterRank(raw.filterClass) : null,
+      func:   ['wifi','vav','humidity','co2'].filter(k => raw.funcs && raw.funcs[k]).length,
+      eff:    type === 'pvu' ? (raw.eff != null && raw.eff !== '' ? parseInt(raw.eff, 10) : null) : null,
+    };
+    const b = _bounds[type] || computeBounds([], type);
+    const r = scoreOne(inp, b, type);
+    r.filterRank = inp.filter;
+    return r;
   }
 
   // ───────────────────────── star HTML ─────────────────────────
@@ -182,99 +189,104 @@ const RATING = (function () {
   }
 
   return {
-    CONFIG, META, ORDER,
-    compute, deriveInputs, applyToAll, setMode, effectiveThresholds, scaleNote,
-    stars, filterPoints, thicknessOf, maxNum,
+    TYPES, PARAM, LADDER,
+    applyToAll, computeFor, inputsOf, segment, segLabel, stars,
+    filterRank, flowMax, priceNum, thicknessOf, noiseMax, effPct,
     renderReference, renderCalculator,
   };
 
-  // ───────────────────────── Reference UI ─────────────────────────
-  function fmtT(t) { return `${(+t.low).toLocaleString('ru-RU')} … ${(+t.high).toLocaleString('ru-RU')}`; }
-  function renderReference(el) {
-    const T = effectiveThresholds();
-    const w = CONFIG.weights;
-    const filterRows = Object.entries(CONFIG.filterScores)
-      .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
-    const funcRows = [['Охладитель', 'cooler'], ['VAV-регулирование', 'vav'], ['Управление влажностью', 'humidity'],
-      ['Датчик CO₂', 'co2'], ['Wi-Fi / удалённо', 'wifi'], ['Рекуперация тепла', 'recup']]
-      .map(([l, k]) => `<tr><td>${l}</td><td>${CONFIG.functionScores[k]}</td></tr>`).join('');
-    const indCards = ORDER.map(k => {
-      const m = META[k];
-      const thr = T[k] ? `<div class="ref-thr">пороги (Низ … Верх): <b>${fmtT(T[k])}</b></div>` : '';
+  // ───────────────────────── Reference UI (type-aware) ─────────────────────────
+  function renderReference(el, type) {
+    const T = TYPES[type];
+    const N = T.params.length;
+    const paramCards = T.params.map(k => {
+      const m = PARAM[k];
+      const kindBadge = m.kind === 'seg'
+        ? '<span class="ref-tag ref-tag--seg">сегментный · меньше лучше</span>'
+        : (m.kind === 'func'
+          ? '<span class="ref-tag ref-tag--abs">абсолютный</span>'
+          : '<span class="ref-tag ref-tag--abs">абсолютный · больше лучше</span>');
+      const formula = m.kind === 'seg'
+        ? '100 × (Макс_сег − знач.) / (Макс_сег − Мин_сег)'
+        : (m.kind === 'func' ? 'кол-во «да» / 4 × 100' : '100 × (знач. − Мин_глоб) / (Макс_глоб − Мин_глоб)');
       return `<div class="ref-ind">
-        <div class="ref-ind__head"><span>${m.icon} ${m.label}</span><span class="ref-w">вес ${w[k]}</span></div>
+        <div class="ref-ind__head"><span>${m.icon} ${m.label}</span>${kindBadge}</div>
         <div class="ref-ind__desc">${m.desc}</div>
-        <div class="ref-formula">Сырьё = ${m.formula}</div>${thr}</div>`;
+        <div class="ref-formula">${formula}</div></div>`;
     }).join('');
+
+    const filterRows = LADDER.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+    const segRows = T.segments.map(([, name]) =>
+      `<tr><td>${name}</td><td>${segLabel(type, name)} м³/ч</td></tr>`).join('');
+
     el.innerHTML = `
-      <p class="ref-lead">Итоговый балл (0–100) — взвешенная сумма пяти показателей. Каждый приводится к шкале
-        0–100 и умножается на свой вес; веса дают в сумме 100.</p>
-      <div class="ref-mode">Текущий режим шкалы: <b>${CONFIG.thresholdMode === 'dynamic'
-        ? 'динамический (' + RATING.scaleNote() + ')' : 'статический (фикс. пороги)'}</b>.
-        ${CONFIG.thresholdMode === 'dynamic'
-          ? 'Оценка относительна — балл модели может меняться при добавлении других моделей.'
-          : 'Пороги зафиксированы — балл модели не зависит от состава базы.'}</div>
-      <div class="ref-weights">${ORDER.map(k => `<span class="ref-chip">${META[k].icon} ${META[k].label}: <b>${w[k]}</b></span>`).join('')}</div>
-      <div class="ref-grid">${indCards}</div>
-      <div class="ref-tables">
-        <div class="ref-tbl"><h4>Баллы за класс фильтра (×10 = вклад)</h4>
-          <table>${filterRows}</table>
-          <p class="ref-small">Несколько классов через «/» → берём максимум. CARB игнорируется.
-          Фильтр есть, класс н/д → G4 (4). Фильтра нет → 0.</p></div>
-        <div class="ref-tbl"><h4>Баллы за функции (сумма, ≤100)</h4>
-          <table>${funcRows}</table>
-          <p class="ref-small">Нагреватель и автоматика есть почти у всех — не учитываются.</p></div>
+      <p class="ref-lead">Итоговый балл (0–100) — <b>среднее ${N} равновесных параметров</b>
+        ${type === 'pvu' ? '(включая КПД рекуператора)' : '(без КПД — у приточных нет рекуперации)'}.
+        Пропущенные параметры засчитываются как <b>0</b>, поэтому неполные позиции не завышаются.</p>
+      <div class="ref-formula-big">ИТОГ = (${T.params.map(k => PARAM[k].label).join(' + ')}) / ${N}</div>
+      <div class="ref-grid">${paramCards}</div>
+      <div class="ref-rules">
+        <b>Правила краёв (для всех параметров):</b>
+        <ul><li>нет данных (н/д) → балл <b>0</b> (штраф за неполноту);</li>
+        <li>нет разброса в выборке (Макс = Мин) → балл <b>50</b> (нейтрально).</li></ul>
+        <p class="ref-small">Сегментные параметры нормируются внутри своего размерного класса (сегмента),
+        абсолютные — глобально по всему типу «${T.label}». Шум измеряется производителями по-разному —
+        балл приблизительный.</p>
       </div>
-      <div class="ref-nodata"><b>Нет данных по показателю?</b> Мы не ставим 0 (иначе штраф за пустую графу).
-        Вес показателя пропорционально перекладывается на остальные:
-        <code>Новый_вес = Старый_вес / (100 − вес_пропущенного) · 100</code>.</div>`;
+      <div class="ref-tables">
+        <div class="ref-tbl"><h4>Сегменты по расходу (${T.label.toLowerCase()})</h4>
+          <table><tr><th>Сегм.</th><th>Расход</th></tr>${segRows}</table></div>
+        <div class="ref-tbl"><h4>Ранги класса фильтрации</h4>
+          <table><tr><th>Класс</th><th>Ранг</th></tr>${filterRows}</table>
+          <p class="ref-small">Несколько классов → берём максимальный ранг. Нет совпадения → нет данных (0).</p></div>
+      </div>`;
   }
 
-  // ───────────────────────── Calculator UI ─────────────────────────
-  function renderCalculator(el) {
+  // ───────────────────────── Calculator UI (type-aware) ─────────────────────────
+  function renderCalculator(el, type) {
+    const isPvu = type === 'pvu';
     el.innerHTML = `
       <div class="calc-grid">
         <label>Цена, ₽<input type="number" id="calcPrice" placeholder="275000" min="0"></label>
         <label>Расход воздуха, м³/ч<input type="text" id="calcFlow" placeholder="450-1000 или 1000"></label>
         <label>Толщина (мин. габарит), мм<input type="number" id="calcThick" placeholder="280" min="0"></label>
         <label>Уровень шума, дБ(А)<input type="text" id="calcNoise" placeholder="50-58 или 35"></label>
-        <label>Класс фильтра<input type="text" id="calcFilter" placeholder="G4/EU9/HEPA"></label>
-        <label class="calc-chk2"><input type="checkbox" id="calcFilterUnknown"> фильтр есть, класс неизвестен (→ G4)</label>
+        <label>Класс фильтра<input type="text" id="calcFilter" placeholder="G4 / EU9 / HEPA"></label>
+        ${isPvu ? '<label>КПД рекуператора, %<input type="number" id="calcEff" placeholder="85" min="0" max="100"></label>' : ''}
       </div>
       <div class="calc-funcs">Функции:
-        ${[['cooler', 'Охладитель'], ['vav', 'VAV'], ['humidity', 'Влажность'], ['co2', 'CO₂'], ['wifi', 'Wi-Fi/удал.'], ['recup', 'Рекуперация']]
+        ${[['wifi','Wi-Fi'],['vav','VAV'],['humidity','Влажность'],['co2','CO₂']]
           .map(([k, l]) => `<label class="calc-fchk"><input type="checkbox" data-func="${k}">${l}</label>`).join('')}
       </div>
       <div class="calc-result" id="calcResult"></div>`;
 
     const get = id => el.querySelector('#' + id);
     function readInputs() {
-      const filterUnknown = get('calcFilterUnknown').checked;
-      const fc = get('calcFilter').value.trim();
       const funcs = {};
       el.querySelectorAll('[data-func]').forEach(c => funcs[c.dataset.func] = c.checked);
       return {
-        priceNum: get('calcPrice').value ? parseFloat(get('calcPrice').value) : null,
-        flowMax: maxNum(get('calcFlow').value),
-        thickness: get('calcThick').value ? parseFloat(get('calcThick').value) : null,
-        noiseMax: maxNum(get('calcNoise').value),
-        filterClass: fc,
-        hasFilter: (fc || filterUnknown) ? 'да' : '',
+        price: get('calcPrice').value ? parseFloat(get('calcPrice').value) : null,
+        flow:  flowMax(get('calcFlow').value),
+        thick: get('calcThick').value ? parseFloat(get('calcThick').value) : null,
+        noise: noiseMax(get('calcNoise').value),
+        filterClass: get('calcFilter').value.trim(),
+        eff:   isPvu && get('calcEff') && get('calcEff').value ? get('calcEff').value : null,
         funcs,
       };
     }
     function update() {
-      const r = compute(readInputs());
-      const rows = r.breakdown.map(b => `
-        <div class="calc-row ${b.active ? '' : 'is-off'}">
-          <span class="calc-row__name">${b.icon} ${b.label}</span>
-          <span class="calc-row__w">вес ${b.active ? Math.round(b.effWeight) : '—'}</span>
+      const r = computeFor(type, readInputs());
+      const sgTxt = r.segment ? `${r.segment} · ${segLabel(type, r.segment)} м³/ч` : 'сегмент не определён (нет расхода)';
+      const rows = TYPES[type].params.map(k => {
+        const b = r.parts[k], m = PARAM[k];
+        return `<div class="calc-row ${b.active ? '' : 'is-off'}">
+          <span class="calc-row__name">${m.icon} ${m.label}</span>
           <span class="calc-row__bar"><span style="width:${b.active ? b.score : 0}%"></span></span>
-          <span class="calc-row__val">${b.active ? Math.round(b.score) : 'нет данных'}</span>
-        </div>`).join('');
+          <span class="calc-row__val">${b.active ? Math.round(b.score) : 'нет данных'}</span></div>`;
+      }).join('');
       get('calcResult').innerHTML = `
         <div class="calc-total"><div class="calc-total__num">${r.total}</div>
-          <div class="calc-total__sub">${stars(r.total)}<span class="calc-scale">${RATING.scaleNote()}</span></div></div>
+          <div class="calc-total__sub">${stars(r.total)}<span class="calc-scale">${sgTxt}</span></div></div>
         <div class="calc-rows">${rows}</div>`;
     }
     el.addEventListener('input', update);
