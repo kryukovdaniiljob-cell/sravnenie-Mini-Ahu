@@ -121,7 +121,20 @@
   <p>Данные собраны с сайтов производителей и носят справочный характер. «н/д» — параметр не опубликован. Балл шума приблизительный (производители измеряют его по-разному).</p>
 </footer>
 
+<!-- analog finder modal -->
+<div class="modal" id="analogModal" hidden>
+  <div class="modal__backdrop"></div>
+  <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="analogTitle">
+    <div class="modal__head">
+      <h3 id="analogTitle">Аналоги</h3>
+      <button class="modal__close" id="analogClose" title="Закрыть">×</button>
+    </div>
+    <div class="modal__body" id="analogBody"></div>
+  </div>
+</div>
+
 <script src="rating.js"></script>
+<script src="analog.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
