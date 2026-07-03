@@ -229,6 +229,7 @@ function renderCompare() {
   if (s.length === 0) return;
   const models = s.map(id => DATA[id]);
   const T = RATING.TYPES[activeType];
+  renderSaleArgs(models);
 
   let html = '<thead><tr><th class="rowlabel"></th>';
   models.forEach(x => {
@@ -317,6 +318,101 @@ function applyDiff() {
     const diff = new Set(vals).size > 1;
     tr.classList.toggle('is-on', on && diff);
   });
+}
+
+// ---------- sale arguments (LOGIC.md §11) ----------
+const FUNC_LABELS = { wifi: 'Wi-Fi', vav: 'VAV', humidity: 'управление влажностью', co2: 'датчик CO₂' };
+let _saleCopies = [];   // plain-text versions for the copy buttons
+
+// SHUFT (s) против конкурента (c) → { pros:[], cons:[] }; только при данных с обеих сторон
+function saleArgsFor(s, c) {
+  const pros = [], cons = [];
+  const num = n => n.toLocaleString('ru-RU');
+  const yes = v => String(v ?? '').trim().toLowerCase() === 'да';
+
+  if (s.flow_max != null && c.flow_max != null) {              // контекст производительности — всегда первым
+    const d = s.flow_max - c.flow_max;
+    if (Math.abs(d) / c.flow_max <= 0.15) pros.push(`сопоставимая производительность (${num(s.flow_max)} против ${num(c.flow_max)} м³/ч)`);
+    else if (d > 0) pros.push(`производительность выше на ${num(d)} м³/ч`);
+    else cons.push(`производительность ниже (${num(s.flow_max)} против ${num(c.flow_max)} м³/ч)`);
+  }
+  if (s.price_num != null && c.price_num != null) {
+    const d = c.price_num - s.price_num;                       // >0 → SHUFT дешевле
+    const pct = Math.round(Math.abs(d) / c.price_num * 100);
+    if (d > 0 && (d >= 10000 || d / c.price_num >= 0.03)) pros.push(`дешевле на ${num(d)} ₽ (−${pct}%)`);
+    else if (d < 0 && (-d >= 10000 || -d / c.price_num >= 0.03)) cons.push(`дороже на ${num(-d)} ₽ (+${pct}%)`);
+  }
+  if (s.noise_max != null && c.noise_max != null) {
+    const d = c.noise_max - s.noise_max;                       // >0 → SHUFT тише
+    if (d >= 3) pros.push(`тише на ${d} дБ`);
+    else if (d <= -3) cons.push(`шумнее на ${-d} дБ`);
+  }
+  if (s.thickness != null && c.thickness != null) {
+    const d = c.thickness - s.thickness;                       // >0 → SHUFT тоньше
+    if (d > 0 && (d >= 30 || d / c.thickness >= 0.10)) pros.push(`компактнее по толщине на ${num(d)} мм`);
+    else if (d < 0 && (-d >= 30 || -d / c.thickness >= 0.10)) cons.push(`толще на ${num(-d)} мм`);
+  }
+  if (s.filter_rank != null && c.filter_rank != null) {
+    if (s.filter_rank > c.filter_rank) pros.push(`класс фильтрации выше (${s.filter_class} против ${c.filter_class})`);
+    else if (s.filter_rank === c.filter_rank) pros.push(`фильтрация не хуже (${s.filter_class})`);
+    else cons.push(`класс фильтрации ниже (${s.filter_class} против ${c.filter_class})`);
+  }
+  const plus = Object.keys(FUNC_LABELS).filter(k => yes(s[k]) && !yes(c[k])).map(k => FUNC_LABELS[k]);
+  const minus = Object.keys(FUNC_LABELS).filter(k => yes(c[k]) && !yes(s[k])).map(k => FUNC_LABELS[k]);
+  if (plus.length) pros.push(`есть ${plus.join(', ')} — у конкурента нет`);
+  if (minus.length) cons.push(`у конкурента есть ${minus.join(', ')}`);
+  if (s.type === 'pvu' && s.eff != null && c.eff != null) {
+    const d = s.eff - c.eff;
+    if (d >= 3) pros.push(`КПД рекуперации выше на ${d} п.п.`);
+    else if (d <= -3) cons.push(`КПД рекуперации ниже на ${-d} п.п.`);
+  }
+  return { pros, cons };
+}
+
+function renderSaleArgs(models) {
+  const box = $('#saleArgs');
+  const shuft = models.find(m => m.brand === 'SHUFT');          // референс — первый выбранный SHUFT
+  const comps = models.filter(m => m.brand !== 'SHUFT');
+  _saleCopies = [];
+  if (!shuft || !comps.length) { box.innerHTML = ''; return; }
+
+  let html = '';
+  comps.forEach(c => {
+    const { pros, cons } = saleArgsFor(shuft, c);
+    const ci = _saleCopies.push(
+      `${shuft.brand} ${shuft.name} против ${c.brand} ${c.name}:\n` + pros.map(p => `— ${p}`).join('\n')) - 1;
+    html += `<div class="sargs">
+      <div class="sargs__head">
+        <span class="sargs__title">💬 Аргументы: <b>SHUFT</b> против <b>${esc(c.brand)}</b> ${esc(c.name)}</span>
+        ${pros.length ? `<button class="btn sargs__copy" data-ci="${ci}">Скопировать</button>` : ''}
+      </div>
+      ${pros.length
+        ? `<div class="sargs__pros">${pros.map(p => `<span class="sargs__chip">✓ ${esc(p)}</span>`).join('')}</div>`
+        : '<div class="sargs__none">Прямых преимуществ по опубликованным данным не найдено.</div>'}
+      ${cons.length ? `<div class="sargs__cons">⚠ Обратите внимание: ${cons.map(esc).join(' · ')}</div>` : ''}
+    </div>`;
+  });
+  html += '<p class="sargs__note">Аргументы построены на опубликованных данных (шум производители измеряют по-разному). Пороги значимости: цена ≥ 10 тыс ₽ или 3%, шум ≥ 3 дБ, толщина ≥ 30 мм или 10%, КПД ≥ 3 п.п.</p>';
+  box.innerHTML = html;
+
+  box.querySelectorAll('.sargs__copy').forEach(b => b.addEventListener('click', () => {
+    copyPlainText(_saleCopies[Number(b.dataset.ci)], () => {
+      b.textContent = '✓ Скопировано';
+      setTimeout(() => { b.textContent = 'Скопировать'; }, 1500);
+    });
+  }));
+}
+
+function copyPlainText(t, done) {
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+    ta.remove(); done();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, fallback);
+  else fallback();
 }
 
 // ---------- analog finder (modal) ----------
