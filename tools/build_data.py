@@ -53,6 +53,11 @@ COLS = [
     "extra",        # 34 Примечание
 ]
 
+# Сняты с производства / не отдельные конкуренты — исключаются из сервиса.
+# SKOYOD — линейка Русклимата (не конкурент), Allston — снятая линейка SHUFT.
+EXCLUDE_BRANDS = {"SKOYOD"}
+EXCLUDE_NAME_RE = re.compile(r"allston", re.I)
+
 LADDER = [("H14",18),("H13",17),("H11",15),("HEPA",15),("E12",14),("E11",13),("EPA",12),
           ("E10",12),("EU9",11),("F9",11),("F8",10),("EU7",9),("F7",9),("F6",8),("EU5",7),
           ("F5",7),("M6",6),("M5",6),("EU4",4),("G4",4),("EU3",3),("G3",3),("G2",2),
@@ -160,6 +165,8 @@ def load(path, typ):
                 continue
             m[key] = s(vals[i])
         m["brand"] = norm_brand(m.get("brand"))
+        if m["brand"] in EXCLUDE_BRANDS or EXCLUDE_NAME_RE.search(m.get("name", "") + " " + m.get("series", "")):
+            continue                      # снятые линейки не попадают в сервис
         m["type"] = typ
         # parsed numeric inputs
         m["price_num"]   = price_num(m.get("price"))
