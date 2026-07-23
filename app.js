@@ -32,7 +32,7 @@ const $ = (s) => document.querySelector(s);
 const grid = $('#grid'), tray = $('#tray'), traySlots = $('#traySlots'),
       compare = $('#compare'), ctable = $('#ctable'), analogModal = $('#analogModal');
 
-let analogState = { origId: null, ignoreHeater: false };   // analog-finder modal state
+let analogState = { origId: null, showAll: false };   // analog-finder modal state
 
 // ---------- init ----------
 fetch('data.json')
@@ -417,7 +417,7 @@ function copyPlainText(t, done) {
 
 // ---------- analog finder (modal) ----------
 function openAnalogModal(id) {
-  analogState = { origId: id, ignoreHeater: false };
+  analogState = { origId: id, showAll: false };
   renderAnalogModal();
   analogModal.hidden = false;
   document.body.style.overflow = 'hidden';           // scroll lock under the modal
@@ -442,15 +442,28 @@ function priceDeltaHtml(orig, cand) {
   if (orig.price_num == null || cand.price_num == null) return '';
   const d = cand.price_num - orig.price_num;
   if (d === 0) return '<span class="pdelta pdelta--same">та же цена</span>';
-  const s = Math.abs(d).toLocaleString('ru-RU') + ' ₽';
+  const pct = Math.round(Math.abs(d) / orig.price_num * 100);
+  const s = `${Math.abs(d).toLocaleString('ru-RU')} ₽ (${d < 0 ? '−' : '+'}${pct}%)`;
   return d < 0 ? `<span class="pdelta pdelta--cheap">дешевле на ${s}</span>`
                : `<span class="pdelta pdelta--exp">дороже на ${s}</span>`;
+}
+
+// пометки совместимости для карточки кандидата
+function analogFlagsHtml(r) {
+  const f = r.flags || {};
+  const chips = [];
+  if (!f.heaterOk) chips.push('<span class="aflag aflag--bad">✗ другой нагреватель</span>');
+  if (!f.powerOk)  chips.push('<span class="aflag aflag--bad">✗ другое питание (220⇄380В)</span>');
+  if (!f.recupOk)  chips.push('<span class="aflag aflag--bad">✗ другой тип рекуператора</span>');
+  if (f.powerUnknown) chips.push('<span class="aflag aflag--warn">⚠ питание н/д</span>');
+  if (f.recupUnknown) chips.push('<span class="aflag aflag--warn">⚠ тип рекуператора н/д</span>');
+  return chips.length ? `<div class="amatch__flags">${chips.join('')}</div>` : '';
 }
 
 function renderAnalogModal() {
   const orig = DATA[analogState.origId];
   const toShuft = orig.brand !== 'SHUFT';
-  const res = ANALOG.findAnalogs(orig, DATA, { ignoreHeater: analogState.ignoreHeater });
+  const res = ANALOG.findAnalogs(orig, DATA, { showAll: analogState.showAll });
   $('#analogTitle').textContent = toShuft ? 'Аналоги от SHUFT' : 'Аналоги у конкурентов';
 
   let html = `
@@ -461,16 +474,21 @@ function renderAnalogModal() {
       <div class="amodal-orig__params">${analogParamsLine(orig)}${orig.price_num ? ` · <b>${orig.price_num.toLocaleString('ru-RU')} ₽</b>` : ''}</div>
     </div>`;
 
-  if (res.hiddenByHeater > 0 || analogState.ignoreHeater) {
-    html += `<label class="amodal-toggle"><input type="checkbox" id="analogHeaterToggle" ${analogState.ignoreHeater ? 'checked' : ''}>
-      <span>показать и с другим типом нагревателя${res.hiddenByHeater > 0 && !analogState.ignoreHeater ? ` (ещё ${res.hiddenByHeater})` : ''}</span></label>`;
+  if (res.widened) {
+    html += `<div class="amodal-widened">Окно расхода расширено до ±40% — в базовом окне −25%/+40% кандидатов мало.</div>`;
+  }
+  if (res.hiddenHard > 0 || analogState.showAll) {
+    html += `<label class="amodal-toggle"><input type="checkbox" id="analogShowAllToggle" ${analogState.showAll ? 'checked' : ''}>
+      <span>показать несовместимые (нагреватель / питание / рекуператор)${res.hiddenHard > 0 && !analogState.showAll ? ` — ещё ${res.hiddenHard}` : ''}</span></label>`;
   }
 
   if (!res.list.length) {
     const reasons = {
       'no-flow': 'У этой модели не указан расход воздуха — подбор по методике невозможен.',
-      'no-window': `Нет моделей ${toShuft ? 'SHUFT' : 'конкурентов'} с расходом в диапазоне ±40% от ${orig.flow_max != null ? orig.flow_max.toLocaleString('ru-RU') : '—'} м³/ч.`,
-      'no-score': 'Достаточно близких аналогов не найдено (совпадение ниже 50 из 100).',
+      'no-window': `Нет моделей ${toShuft ? 'SHUFT' : 'конкурентов'} с расходом в окне −25%…+40% (и даже ±40%) от ${orig.flow_max != null ? orig.flow_max.toLocaleString('ru-RU') : '—'} м³/ч.`,
+      'no-score': res.hiddenHard > 0
+        ? `Совместимых аналогов нет: ${res.hiddenHard} кандидат(а) отсеяны жёсткими фильтрами (нагреватель / питание / рекуператор) — включите «показать несовместимые», чтобы увидеть их.`
+        : 'Достаточно близких аналогов не найдено (совпадение ниже 50 из 100).',
     };
     html += `<div class="amodal-empty">${reasons[res.reason] || 'Аналогов не найдено.'}</div>`;
   } else {
@@ -490,6 +508,7 @@ function renderAnalogModal() {
           <div class="amatch__brand">${esc(m.brand)}</div>
           <div class="amatch__name">${esc(m.name)}</div>
           <div class="amatch__params">${analogParamsLine(m)}</div>
+          ${analogFlagsHtml(r)}
           <div class="amatch__foot">
             <span class="amatch__price">${m.price_num ? m.price_num.toLocaleString('ru-RU') + ' ₽' : 'цена н/д'}${priceDeltaHtml(orig, m)}</span>
             <button class="btn btn--primary amatch__cmp" data-id="${m.id}">Сравнить</button>
@@ -498,12 +517,12 @@ function renderAnalogModal() {
     });
     html += '</div>';
   }
-  html += `<p class="amodal-note">Балл соответствия: расход (якорь ±40%), нагреватель, функции, шум, толщина, фильтрация${orig.type === 'pvu' ? ', КПД рекуператора' : ''}. Нет данных — параметр выпадает из балла. Цена в балл не входит — показана разница с оригиналом.</p>`;
+  html += `<p class="amodal-note">Балл соответствия: расход (окно −25%/+40%, «слабее» штрафуется сильнее), нагреватель, функции, шум, толщина, фильтрация, двигатель EC/AC${orig.type === 'pvu' ? ', КПД и тип рекуператора' : ''}. Жёстко отсеиваются: другое питание (220⇄380В)${orig.type === 'pvu' ? ', роторный⇄пластинчатый рекуператор' : ''}, другой нагреватель. Нет данных — параметр выпадает из балла (⚠-пометка). Цена в балл не входит: при близких баллах (±5) выше встаёт выгоднее по цене.</p>`;
 
   $('#analogBody').innerHTML = html;
 
-  const tg = $('#analogHeaterToggle');
-  if (tg) tg.addEventListener('change', () => { analogState.ignoreHeater = tg.checked; renderAnalogModal(); });
+  const tg = $('#analogShowAllToggle');
+  if (tg) tg.addEventListener('change', () => { analogState.showAll = tg.checked; renderAnalogModal(); });
   const topBtn = $('#analogTopBtn');
   if (topBtn) topBtn.addEventListener('click', () => compareWithAnalogs(res.list.slice(0, 3).map(r => r.model.id)));
   $('#analogBody').querySelectorAll('.amatch__cmp').forEach(b =>
