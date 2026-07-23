@@ -50,7 +50,7 @@ const RATING = (function () {
   // ───────────────────────── helpers ─────────────────────────
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
   const intsOf = s => { const m = String(s == null ? '' : s).match(/\d+/g); return m ? m.map(Number) : []; };
-  const isYes  = v => String(v == null ? '' : v).trim().toLowerCase() === 'да';
+  const isYes  = v => String(v == null ? '' : v).trim().toLowerCase().startsWith('да');  // «да (web)» и т.п.
 
   function priceNum(b)  { const d = String(b == null ? '' : b).replace(/[^\d]/g, ''); return d ? parseInt(d, 10) : null; }
   function flowMax(e)   { const x = intsOf(e); return x.length ? Math.max(...x) : null; }

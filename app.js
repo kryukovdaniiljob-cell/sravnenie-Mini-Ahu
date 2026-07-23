@@ -17,15 +17,15 @@ const PRIORITY = [
 // detail sections (pvuOnly hidden for supply units)
 const SECTIONS = [
   { title: '💰 Цена', rows: [['price', 'Цена, руб']] },
-  { title: '📏 Габариты', rows: [['dims', 'Размеры Ш×В×Г, мм'], ['__thick', 'Толщина (мин. сторона), мм'], ['dims_ports', 'С учётом патрубков, мм']] },
-  { title: '🔌 Питание и защита', rows: [['power', 'Питание, ф/В/Гц'], ['ip', 'Степень защиты IP'], ['shock', 'Класс электрозащиты']] },
-  { title: '🌬️ Воздушный клапан', rows: [['valve', 'Наличие клапана'], ['valve_drive', 'Привод клапана'], ['drive_type', 'Тип привода']] },
-  { title: '🔁 Рекуперация', pvuOnly: true, rows: [['recup', 'Наличие рекуперации'], ['recup_type', 'Тип рекуператора'], ['recup_maker', 'Производитель'], ['recup_eff', 'КПД рекуператора']] },
-  { title: '🔥 Нагреватель', rows: [['heater', 'Наличие нагревателя'], ['heater_type', 'Тип (вода/электр.)'], ['heater_elem', 'Элемент (ТЭН/PTC)']] },
-  { title: '❄️ Охладитель', rows: [['cooler', 'Наличие охладителя'], ['cooler_type', 'Тип охладителя']] },
-  { title: '🌀 Вентилятор', rows: [['fan_type', 'Тип вентилятора'], ['motor', 'Тип двигателя'], ['power_fan', 'Питание вентилятора'], ['two_fans', 'Два вентилятора']] },
-  { title: '🎛️ Управление', rows: [['auto', 'Автоматика'], ['controller', 'Контроллер'], ['remote', 'Пульт'], ['remote_type', 'Тип пульта'], ['wifi', 'Wi-Fi'], ['vav', 'VAV'], ['humidity', 'Влажность'], ['co2', 'Датчик CO₂']] },
-  { title: 'ℹ️ Дополнительно', rows: [['pressure', 'Свободный напор, Па'], ['model_code', 'Модель'], ['extra', 'Доп. требования'], ['url', 'Источник']] },
+  { title: '📏 Габариты', rows: [['dims', 'Размеры Ш×В×Г, мм'], ['__thick', 'Толщина (мин. сторона), мм'], ['weight', 'Масса, кг']] },
+  { title: '🔌 Питание и мощность', rows: [['power', 'Питание, ф/В/Гц'], ['fan_kw', 'Мощность вентиляторов, кВт'], ['heat_kw', 'Мощность нагревателя, кВт'], ['ip', 'Степень защиты IP']] },
+  { title: '🌬️ Воздушный клапан', rows: [['valve', 'Воздушный клапан'], ['valve_drive', 'Привод клапана']] },
+  { title: '🔁 Рекуперация', pvuOnly: true, rows: [['recup', 'Наличие рекуперации'], ['recup_type', 'Тип рекуператора'], ['recup_eff', 'КПД рекуперации, %']] },
+  { title: '🔥 Нагреватель', rows: [['heater_type', 'Нагреватель (вода/электр.)'], ['heater_elem', 'Элемент (ТЭН/PTC)']] },
+  { title: '❄️ Охладитель', rows: [['cooler', 'Охладитель']] },
+  { title: '🌀 Вентилятор', rows: [['fan_type', 'Тип вентилятора'], ['motor', 'Двигатель (AC/EC)']] },
+  { title: '🎛️ Управление', rows: [['auto', 'Автоматика'], ['controller', 'Контроллер'], ['remote', 'Пульт'], ['wifi', 'Wi-Fi'], ['vav', 'VAV'], ['humidity', 'Влажность'], ['co2', 'Датчик CO₂']] },
+  { title: 'ℹ️ Дополнительно', rows: [['pressure', 'Свободный напор, Па'], ['series', 'Серия'], ['extra', 'Примечание'], ['url', 'Карточка товара'], ['passport', 'Паспорт (источник)']] },
 ];
 
 const $ = (s) => document.querySelector(s);
@@ -328,7 +328,7 @@ let _saleCopies = [];   // plain-text versions for the copy buttons
 function saleArgsFor(s, c) {
   const pros = [], cons = [];
   const num = n => n.toLocaleString('ru-RU');
-  const yes = v => String(v ?? '').trim().toLowerCase() === 'да';
+  const yes = v => String(v ?? '').trim().toLowerCase().startsWith('да');   // «да», «да (web)», «да, сенсорный…»
 
   if (s.flow_max != null && c.flow_max != null) {              // контекст производительности — всегда первым
     const d = s.flow_max - c.flow_max;
@@ -527,6 +527,12 @@ function fmt(key, x) {
   let v = (x[key] ?? '').toString().trim();
   if (key === 'price') return x.price_num ? `<span class="val val--big">${x.price_num.toLocaleString('ru-RU')} ₽</span>` : ndp();
   if (key === 'url') return v ? `<a class="linkout" href="${esc(v)}" target="_blank" rel="noopener">открыть ↗</a>` : ndp();
+  if (key === 'passport') {
+    if (!v || v.toLowerCase() === 'н/д') return ndp();
+    return v.startsWith('http')
+      ? `<a class="linkout" href="${esc(v)}" target="_blank" rel="noopener">паспорт ↗</a>`
+      : `<span class="val">${esc(v)}</span>`;
+  }
   if (v === '' || v.toLowerCase() === 'н/д' || v.toLowerCase() === 'none' || v.toLowerCase() === 'нет данных') return ndp();
   if (v === 'да') return '<span class="pill pill--ok">да</span>';
   if (v === 'нет') return '<span class="pill pill--no">нет</span>';

@@ -24,7 +24,7 @@ const ANALOG = (function () {
   const FUNC_KEYS   = ['wifi', 'vav', 'humidity', 'co2'];
 
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
-  const isYes = v => String(v == null ? '' : v).trim().toLowerCase() === 'да';
+  const isYes = v => String(v == null ? '' : v).trim().toLowerCase().startsWith('да');  // «да (web)», «да, сенсорный…»
 
   // тип нагревателя: 'water' | 'electric' | 'both' | 'none' | null (н/д)
   function heaterKind(m) {
